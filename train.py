@@ -111,16 +111,33 @@ class PixelNeRFTrainer:
             if "c" in data:
                 c = data["c"][obj_idx] # [2]
             if curr_nviews > 1: # 如果要不只取一張照片 則取多個索引
-                image_ord[obj_idx] = torch.from_numpy(np.random.choice(NV, curr_nviews, replace=False))
-            images_0to1 = images * 0.5 + 0.5 # normalize images
+                image_ord[obj_idx] = torch.from_numpy(np.random.choice(NV, curr_nviews, replace=False)) 
             rays = util.gen_rays(poses, W, H, focal, self.z_near, self.z_far, c=c) # [NV,H,W,8]
-            rgb_gt_all = images_0to1 # [N_images,3,H,W]
+            rgb_gt_all = images * 0.5 + 0.5 # [N_images,3,H,W], normalize images
             rgb_gt_all = rgb_gt_all.permute(0,2,3,1).contiguous().reshape(-1,3) # [N_images,H,W,3] -> [N_images*H*W,3]
             
             if all_bboxes is not None:
                 pix = util.bbox_sample(bboxes, args.ray_batch_size)
-                從這邊開始
-                
+                # pix[...,0]是圖片索引 所以共有H*W個pixels, pix[...,1]為Y座標有W個pixel
+                pix_inds = pix[...,0]*H*W + pix[...,1]*W + pix[...,2] # [ray_batch_size] 所有輸入圖片中的pixels索引
+            else:
+                pix_inds = torch.randint(0, NV*H*W, (args.ray_batch_size,))
+            
+            rgb_gt = rgb_gt_all[pix_inds] # 映射對應的pixels索引到相應的rgb_gt
+            rays = rays.view(-1, rays.shape[-1])[pix_inds].to(device=device) 
+                # 從rays找出pix_inds(要預測的pixels)對應的rays
+            all_rgb_gt.append(rgb_gt)
+            all_rays.append(rays)
+        
+        all_rgb_gt = torch.stack(all_rgb_gt)  # (SB, ray_batch_size, 3) 
+        all_rays = torch.stack(all_rays)  # (SB, ray_batch_size, 8)
+
+        image_ord = image_ord.to(device)
+        src_images = util.batched_index_select_nd(all_images, image_ord) # [SB,NV(1),3,H,W]
+        src_poses = util.batched_index_select_nd(all_poses, image_ord) # [SB,NV(1),4,4]
+        all_bboxes = all_poses = all_images = None # 歸零
+        model.encode(src_images, src_poses, all_focal.to(device=device), 
+                     c=all_c.to(device=device) if all_c is not None else None)
 
 
     def train_step(self, data, global_step):

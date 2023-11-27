@@ -8,8 +8,27 @@ import functools
 import math
 import warnings
 
-# 將圖片中的每個pixel映射到相機坐標系中
-def unproj_map(width, height, focal, c=None, device="cpu"):
+def batched_index_select_nd(all_images, image_ord): # 根據image_ord找出對應的輸入圖片
+    """
+    param all_images [SB,NV,3,H,W]
+    param image_ord [SB,1]
+    return [SB,1]
+    """
+    X = image_ord[(...,) + (None,) * (len(all_images.shape) - 2)] # [SB,1,1,1,1]將image_ord擴展成跟all_images一樣的dimension (5維)
+    X = X.expand(-1,-1, *all_images.shape[2:]) # 擴展成[NV,1,3,H,W]
+    return all_images.gather(1, X) # [NV,1,3,H,W], 根據索引找出對應的圖片
+
+def bbox_sample(bboxes, N_pixels): # 在bounding bboxes中sample N_pixels個pixels並找到對應的輸入圖片索引
+    # N_pixels default=5000
+    # 一次訓練N_pixels (args.ray_batch_size為50000), 為每個pixel對應不同張輸入圖片
+    image_id = torch.randint(0, bboxes.shape[0], (N_pixels,)) # [N_pixels]
+    pix_bboxes = bboxes[image_id] # [N_pixels,4] 取出相應輸入圖片的bbox
+    x = (torch.rand(N_pixels) * (pix_bboxes[:,2] + 1 - pix_bboxes[:,0]) + pix_bboxes[:,0]).long()
+    y = (torch.rand(N_pixels) * (pix_bboxes[:,3] + 1 - pix_bboxes[:,1]) + pix_bboxes[:,1]).long()
+    pix = torch.stack((image_id, y, x), dim=-1)
+    return pix # +1是為了不要超出邊界, x,y就是在bounding bboxes中 Sample一些pixels的座標(2D) 並結合他們對應的索引
+
+def unproj_map(width, height, focal, c=None, device="cpu"): # 將圖片中的每個pixel映射到相機坐標系中
     if c is None: # 取圖像中心點
         c = [width*0.5, height*0.5]
     else: # 壓縮多餘的維度, EX: [1,1,2] => [2]
@@ -59,8 +78,7 @@ def gen_rays(poses, width, height, focal, z_near, z_far, c=None, ndc=False):
     cam_fars = torch.tensor(z_far, device=device).view(1,1,1,1).expand(num_images, height, width, -1)
     return torch.cat((rays_o, rays_d, cam_nears, cam_fars), dim=-1)
 
-# 將rays_o移動到近平面
-def ndc_rays(H, W, focal, near, rays_o, rays_d):
+def ndc_rays(H, W, focal, near, rays_o, rays_d): # 將rays_o移動到近平面
     # Shift ray origins to near plane
     t = -(near + rays_o[...,2]) / rays_d[...,2]
     rays_o = rays_o + t[...,None] * rays_d
@@ -79,8 +97,7 @@ def ndc_rays(H, W, focal, near, rays_o, rays_d):
     
     return rays_o, rays_d
 
-# 使用GPU加速運算
-def get_cuda(gpu_id):
+def get_cuda(gpu_id): # 使用GPU加速運算
     """
     Get a torch.device for GPU gpu_id. If GPU not available,
     returns CPU device.

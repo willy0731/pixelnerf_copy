@@ -120,7 +120,7 @@ class SRNDataset(torch.utils.data.Dataset):
         all_imgs = torch.stack(all_imgs) # [N_images,3,128,128] 
         all_poses = torch.stack(all_poses) # [N_images,4,4]
         all_masks = torch.stack(all_masks) # [N_images,1,128,128]
-        all_bboxes = torch.stack(all_bboxes) # [N_images,4] (4=cmin,cmax,rmin,rmax)
+        all_bboxes = torch.stack(all_bboxes) # [N_images,4] (4=cmin,rmin,cmax,rmax)
         
         if all_imgs.shape[-2:] != self.image_size: # H,W 尺寸不合則進行縮放
             scale = self.image_size[0] / all_imgs.shape[-2] # 分母分子都是H
