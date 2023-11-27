@@ -138,7 +138,11 @@ class PixelNeRFTrainer:
         all_bboxes = all_poses = all_images = None # 歸零
         model.encode(src_images, src_poses, all_focal.to(device=device), 
                      c=all_c.to(device=device) if all_c is not None else None)
-
+        
+        render_dict = DotMap(render_par(all_rays, want_weights=True,))
+        coarse = render_dict.coarse
+        fine = render_dict.fine
+        using_fine = len(fine) > 0
 
     def train_step(self, data, global_step):
         return self.calc_losses(data, is_train=True, global_step=global_step)
@@ -228,7 +232,13 @@ if __name__ == '__main__':
 
     model = make_model(conf["model"]).to(device=device)
     model.encoder.eval()
+    
     renderer = NeRFRenderer.from_conf(conf["renderer"], lindisp=False,).to(device=device)
+    
+    # Parallize 使得render可以拆分在不同GPU上並行操作 並指定要使用的view數量
+    render_par = renderer.bind_parallel(model, args.gpu_id).eval()
+    
+    # Parallize 使得render可以拆分在不同GPU上並行操作 並指定要使用的view數量
     nviews = list(map(int, args.nviews.split())) # [1]
     
     trainer = PixelNeRFTrainer()

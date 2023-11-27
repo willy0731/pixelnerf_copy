@@ -12,14 +12,8 @@ class _RenderWrapper(torch.nn.Module):
 
     def forward(self, rays, want_weights=False):
         if rays.shape[0] == 0:
-            return (
-                torch.zeros(0, 3, device=rays.device),
-                torch.zeros(0, device=rays.device),
-            )
-
-        outputs = self.renderer(
-            self.net, rays, want_weights=want_weights and not self.simple_output
-        )
+            return (torch.zeros(0, 3, device=rays.device),torch.zeros(0, device=rays.device),)
+        outputs = self.renderer(self.net, rays, want_weights=want_weights and not self.simple_output)
         if self.simple_output:
             if self.renderer.using_fine:
                 rgb = outputs.fine.rgb
@@ -28,7 +22,7 @@ class _RenderWrapper(torch.nn.Module):
                 rgb = outputs.coarse.rgb
                 depth = outputs.coarse.depth
             return rgb, depth
-        else:
+        else: # default
             # Make DotMap to dict to support DataParallel
             return outputs.toDict()
 
@@ -209,6 +203,8 @@ class NeRFRenderer(torch.nn.Module):
             points = None
             viewdirs = None
             # (B*K, 4) OR (SB, B'*K, 4)->if multi-object
+            print(val_all)
+            print(eval_batch_dim)
             out = torch.cat(val_all, dim=eval_batch_dim)
             out = out.reshape(B, K, -1)  # (B, K, 4 or 5)
 

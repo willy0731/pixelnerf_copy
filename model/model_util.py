@@ -1,9 +1,7 @@
 from .encoder import SpatialEncoder
 from .resnetfc import ResnetFC
 
-# MLP可使用ImplicitNet 或 ResnetFC
-# 預設用resnet
-def make_mlp(conf, d_in, d_latent=0, allow_empty=False, **kwargs):
+def make_mlp(conf, d_in, d_latent=0, allow_empty=False, **kwargs): # 選擇ResnetFC作為架構
     mlp_type = conf.get_string("type", "mlp")  # mlp | resnet
     if mlp_type == "resnet":
         net = ResnetFC.from_conf(conf, d_in, d_latent=d_latent, **kwargs)
@@ -13,9 +11,8 @@ def make_mlp(conf, d_in, d_latent=0, allow_empty=False, **kwargs):
         raise NotImplementedError("Unsupported MLP type")
     return net
 
-# 選擇使用Spatial Encoder (PixelNeRF論文中提及)
-def make_encoder(conf, **kwargs):
-    enc_type = conf.get_string("type", "spatial")  # spatial | global
+def make_encoder(conf, **kwargs): # 選擇Spatial CNN Encoder
+    enc_type = conf.get_string("type", "spatial")  # spatial
     if enc_type == "spatial":
         net = SpatialEncoder.from_conf(conf, **kwargs)
     else:
