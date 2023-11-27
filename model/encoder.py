@@ -8,6 +8,7 @@ import torchvision
 import util
 from model.custom_encoder import ConvEncoder
 import torch.autograd.profiler as profiler
+from torchvision.models import ResNet34_Weights
 
 # PixelNeRF 主要是用這個
 class SpatialEncoder(nn.Module):
@@ -60,8 +61,11 @@ class SpatialEncoder(nn.Module):
             self.latent_size = self.model.dims[-1]
         else: # 使用Resnet
             print("Using torchvision", backbone, "encoder")
+            # self.model = getattr(torchvision.models, backbone)(
+            #     pretrained=pretrained, norm_layer=norm_layer
+            # )
             self.model = getattr(torchvision.models, backbone)(
-                pretrained=pretrained, norm_layer=norm_layer
+                weights=ResNet34_Weights.IMAGENET1K_V1, norm_layer=norm_layer
             )
             # Following 2 lines need to be uncommented for older configs
             self.model.fc = nn.Sequential() # 去掉最後的fully connected層

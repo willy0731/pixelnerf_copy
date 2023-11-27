@@ -1,7 +1,8 @@
 import os
 import torch
 import torch.nn.functional as F
-import torchvision.transforms.functional_tensor as F_t
+# import torchvision.transforms.functional_tensor as F_t
+import torchvision.transforms.v2.functional as F_t # 代換, 讓warning消失
 import torchvision.transforms.functional as TF
 import numpy as np
 import imageio

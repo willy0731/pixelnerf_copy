@@ -10,6 +10,13 @@ def parse_args(
     default_datadir="data",
 ):
     parser = argparse.ArgumentParser()
+    parser.add_argument("--batch_size", "-B", type=int, default=1, 
+                        help="Object batch size(SB)")
+    parser.add_argument("--nviews", "-V", type=str, default="1", 
+                        help="Number of source views (multiview); put multiple (space delim) to pick randomly per batch ('NV')")
+    parser.add_argument("--freeze_enc", action="store_true", default=None, help="Freeze encoder weights and only train MLP")
+    parser.add_argument("--no_bbox_step", type=int, default=100000, help="Step to stop using bbox sampling")
+    parser.add_argument("--fixed_test", action="store_true", default=None, help="Freeze encoder weights and only train MLP")
     parser.add_argument("--conf", "-c", type=str, default=None, help="default_mv.conf")
     parser.add_argument("--resume", "-r", action="store_true", help="continue training")
     parser.add_argument("--gpu_id", type=str, default="0", help="GPU(s) to use, space delimited")

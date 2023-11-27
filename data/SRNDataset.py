@@ -29,7 +29,7 @@ class SRNDataset(torch.utils.data.Dataset):
 
         assert os.path.exists(self.base_path) # 確定路徑存在
 
-        is_chair = "chair" in self.dataset_name # 若訓練dataset為chair則=True
+        is_chair = "chair" in self.dataset_name # 若訓練dataset為chair則為True
         if is_chair and stage == "train":
             # Ugly thing from SRN's public dataset
             tmp = os.path.join(self.base_path, "chairs_2.0_train")
@@ -80,10 +80,11 @@ class SRNDataset(torch.utils.data.Dataset):
         all_bboxes = []
         count=0
         for rgb_path, pose_path in zip(rgb_paths, pose_paths):
-            if count == 3:
-                break
-            count += 1
-            img = imageio.imread(rgb_path)[..., :3] # [3,256,256]
+            # if count == 3:
+            #     break
+            # print(rgb_path)
+            #想辦法讓SRN dataset一次只抓一種類別的一張圖片
+            img = imageio.imread(rgb_path)[..., :3] # [3,128,128]
             img_tensor = self.image_to_tensor(img) # [3,128,128]
             
             # mask中的值只有0 or 255 決定該Pixel為前景or背景
@@ -115,12 +116,12 @@ class SRNDataset(torch.utils.data.Dataset):
             all_masks.append(mask_tensor)
             all_poses.append(pose)
             all_bboxes.append(bbox)
-
-        all_imgs = torch.stack(all_imgs)
-        all_poses = torch.stack(all_poses)
-        all_masks = torch.stack(all_masks)
-        all_bboxes = torch.stack(all_bboxes)
-
+        
+        all_imgs = torch.stack(all_imgs) # [N_images,3,128,128] 
+        all_poses = torch.stack(all_poses) # [N_images,4,4]
+        all_masks = torch.stack(all_masks) # [N_images,1,128,128]
+        all_bboxes = torch.stack(all_bboxes) # [N_images,4] (4=cmin,cmax,rmin,rmax)
+        
         if all_imgs.shape[-2:] != self.image_size: # H,W 尺寸不合則進行縮放
             scale = self.image_size[0] / all_imgs.shape[-2] # 分母分子都是H
             focal *= scale

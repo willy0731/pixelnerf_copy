@@ -8,6 +8,78 @@ import functools
 import math
 import warnings
 
+# 將圖片中的每個pixel映射到相機坐標系中
+def unproj_map(width, height, focal, c=None, device="cpu"):
+    if c is None: # 取圖像中心點
+        c = [width*0.5, height*0.5]
+    else: # 壓縮多餘的維度, EX: [1,1,2] => [2]
+        c = c.squeeze()
+    if isinstance(focal, float):
+        focal = [focal,focal]
+    elif len(focal.shape) == 0: # SRN default
+        focal = focal[None].expand(2) # 也是把[f]擴展成[f,f]
+    elif len(focal.shape) == 1:
+        focal = focal.expand(2)
+    Y, X = torch.meshgrid(torch.arange(height, dtype=torch.float32) - float(c[1]),
+                          torch.arange(width, dtype=torch.float32) - float(c[0]),
+                          indexing='xy') # 建立座標網格
+    X = X.to(device=device) / float(focal[0]) # [H,W,3]
+    Y = Y.to(device=device) / float(focal[1]) # 將pixel映射到相機坐標系
+    Z = torch.ones_like(X)
+    unproj = torch.stack((X,-Y,-Z), dim=-1) # [H,W,3]
+    # 相機坐標系中,通常X軸向前, Y軸向左, Z軸向上
+    # 因此Y軸要翻轉, 因為Y軸翻轉Z軸才要跟著乘上負號 (右手定則)
+    unproj /= torch.norm(unproj, dim=-1).unsqueeze(-1) # 分母為[H,W,1], normalize unproj
+    return unproj
+
+def gen_rays(poses, width, height, focal, z_near, z_far, c=None, ndc=False):
+    num_images = poses.shape[0] # NV
+    
+    device = poses.device
+    # 將圖片中的pixel映射到相機坐標系中
+    cam_unproj_map = (unproj_map(width, height, focal.squeeze(), c=c, device=device) # [H,W,3]
+                      .unsqueeze(0) # [1,H,W,3]
+                      .repeat(num_images, 1, 1, 1)) # [N_images,H,W,3]
+    
+    rays_o = poses[:, None, None, :3, 3].expand(-1,height,width,-1) # 取得各張圖的相機位置 複製Pixel個
+    # 把 "相機的右,上,前向量" 乘上 "把各pixel映射到相機坐標系上" = "各pixel的方向向量"
+    rays_d = torch.matmul(poses[:, None, None, :3, :3], cam_unproj_map.unsqueeze(-1))[:,:,:,:,0]
+    # print(poses[:, None, None, :3, :3].shape) [N_images,1,1,3,3]
+    # print(cam_unproj_map.unsqueeze(-1).shape) [N_images,H,W,3,1]
+    # print(torch.matmul(poses[:, None, None, :3, :3], cam_unproj_map.unsqueeze(-1)).shape) [N_images,H,W,3,1]
+    # print(rays_d.shape) [N_images,H,W,3]
+    if ndc: # SRN預設是沒有
+        if not (z_near == 0 and z_far == 1):
+            warnings.warn("dataset z near and z_far not compatible with NDC, setting them to 0, 1 NOW")
+    
+        z_near, z_far = 0.0, 1.0
+        rays_o, rays_d = ndc_rays(width, height, focal, 1.0, rays_o, rays_d)
+    
+    cam_nears = torch.tensor(z_near, device=device).view(1,1,1,1).expand(num_images, height, width, -1)
+    cam_fars = torch.tensor(z_far, device=device).view(1,1,1,1).expand(num_images, height, width, -1)
+    return torch.cat((rays_o, rays_d, cam_nears, cam_fars), dim=-1)
+
+# 將rays_o移動到近平面
+def ndc_rays(H, W, focal, near, rays_o, rays_d):
+    # Shift ray origins to near plane
+    t = -(near + rays_o[...,2]) / rays_d[...,2]
+    rays_o = rays_o + t[...,None] * rays_d
+    
+    # Projection
+    o0 = -1./(W/(2.*focal)) * rays_o[...,0] / rays_o[...,2]
+    o1 = -1./(H/(2.*focal)) * rays_o[...,1] / rays_o[...,2]
+    o2 = 1. + 2. * near / rays_o[...,2]
+
+    d0 = -1./(W/(2.*focal)) * (rays_d[...,0]/rays_d[...,2] - rays_o[...,0]/rays_o[...,2])
+    d1 = -1./(H/(2.*focal)) * (rays_d[...,1]/rays_d[...,2] - rays_o[...,1]/rays_o[...,2])
+    d2 = -2. * near / rays_o[...,2]
+    
+    rays_o = torch.stack([o0,o1,o2], -1)
+    rays_d = torch.stack([d0,d1,d2], -1)
+    
+    return rays_o, rays_d
+
+# 使用GPU加速運算
 def get_cuda(gpu_id):
     """
     Get a torch.device for GPU gpu_id. If GPU not available,
@@ -18,6 +90,8 @@ def get_cuda(gpu_id):
         if torch.cuda.is_available()
         else torch.device("cpu")
     )
+
+########################################
 
 # torch的該套件速度太慢, 因此這邊自己宣告
 # 在指定維度重複輸入數據以擴展data的大小形狀
