@@ -107,19 +107,17 @@ def get_cuda(gpu_id): # 使用GPU加速運算
         if torch.cuda.is_available()
         else torch.device("cpu")
     )
-
-########################################
-
-# torch的該套件速度太慢, 因此這邊自己宣告
-# 在指定維度重複輸入數據以擴展data的大小形狀
-def repeat_interleave(input, repeats, dim=0):
-    """
+    
+def repeat_interleave(input, repeats, dim=0): # 在指定維度重複輸入數據以擴展data的大小形狀
+    """ torch的該套件速度太慢, 因此這邊自己宣告
     Repeat interleave along axis 0
     torch.repeat_interleave is currently very slow
     https://github.com/pytorch/pytorch/issues/31980
     """
     output = input.unsqueeze(1).expand(-1, repeats, *input.shape[1:])
     return output.reshape(-1, *input.shape[1:])
+
+########################################
 
 # 架構圖中把各個ResBlock取Mean
 def combine_interleaved(t, inner_dims=(1,), agg_type="average"):

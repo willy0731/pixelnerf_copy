@@ -148,10 +148,12 @@ class NeRFRenderer(torch.nn.Module):
         with profiler.record_function("renderer_composite"):
             B, K = z_sample.shape # 50000, 64
 
+            # 計算delta
             deltas = z_sample[:, 1:] - z_sample[:, :-1]  # [ray_batch_size, Kc-1]
             delta_inf = rays[:, -1:] - z_sample[:, -1:] # delta_inf為最後一格delta, 限於far
             deltas = torch.cat([deltas, delta_inf], -1)  # [ray_batch_size, Kc]
 
+            # 計算sample points的座標
             points = rays[:, None, :3] + z_sample.unsqueeze(2) * rays[:, None, 3:6] # [ray_batch_size, Kc, 3] x=o+td 
             points = points.reshape(-1, 3)  # (ray_batch_size*Kc, 3)
             use_viewdirs = hasattr(model, "use_viewdirs") and model.use_viewdirs # True
@@ -179,7 +181,6 @@ class NeRFRenderer(torch.nn.Module):
 
                 # 把pts,viewdirs丟進MLP中作預測rgb,sigma
                 for pnts, dirs in zip(split_points, split_viewdirs):
-                    print(model)
                     val_all.append(model(pnts, coarse=coarse, viewdirs=dirs))
             else:
                 for pnts in split_points:

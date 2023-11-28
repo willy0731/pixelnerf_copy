@@ -31,7 +31,7 @@ class PixelNeRFNet(torch.nn.Module):
         d_out = 4 # RGB,sigma
          
         self.latent_size = self.encoder.latent_size
-        self.mlp_coarse = make_mlp(conf["mlp_coarse"], d_in, d_latent, d_out, d_out=d_out)
+        self.mlp_coarse = make_mlp(conf["mlp_coarse"], d_in, d_latent, d_out=d_out)
         self.mlp_fine = make_mlp(conf["mlp_fine"], d_in, d_latent, d_out=d_out, allow_empty=True)
         self.register_buffer("poses", torch.empty(1, 3, 4), persistent=False) # camera poses
         self.register_buffer("image_shape", torch.empty(2), persistent=False) # H&W
@@ -105,8 +105,10 @@ class PixelNeRFNet(torch.nn.Module):
             # 也就是把xyz座標從世界坐標系轉成相機坐標系
             xyz_rot = torch.matmul(self.poses[:, None, :3, :3], xyz.unsqueeze(-1))[..., 0]
             xyz = xyz_rot + self.poses[:, None, :3, 3]
-            
+
             if self.d_in > 0:
                 if self.use_xyz:
                     if self.normalize_z:
-                        z_feaure = xyz_rot.reshape(-1,3) # []
+                        z_feaure = xyz_rot.reshape(-1,3)
+            從這邊開始寫
+                    
