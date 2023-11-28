@@ -45,40 +45,27 @@ class NeRFRenderer(torch.nn.Module):
     """
 
     def __init__(
-        self,
-        n_coarse=128,
-        n_fine=0,
-        n_fine_depth=0,
-        noise_std=0.0,
-        depth_std=0.01, # depth的noise
-        eval_batch_size=100000,
-        white_bkgd=False,
-        lindisp=False,
-        sched=None,  # ray sampling schedule for coarse and fine rays
-    ):
+        self, n_coarse=128, n_fine=0, n_fine_depth=0,
+        noise_std=0.0, depth_std=0.01, eval_batch_size=100000, 
+        white_bkgd=False, lindisp=False, sched=None # ray sampling schedule for coarse and fine rays
+        ):  
         super().__init__()
-        self.n_coarse = n_coarse
-        self.n_fine = n_fine
-        self.n_fine_depth = n_fine_depth
-
-        self.noise_std = noise_std
-        self.depth_std = depth_std
-
-        self.eval_batch_size = eval_batch_size
-        self.white_bkgd = white_bkgd
-        self.lindisp = lindisp
+        self.n_coarse = n_coarse # 64
+        self.n_fine = n_fine # 32
+        self.n_fine_depth = n_fine_depth # 16
+        self.noise_std = noise_std # 0.0
+        self.depth_std = depth_std # 0.01
+        self.eval_batch_size = eval_batch_size # 100000
+        self.white_bkgd = white_bkgd # 1.0
+        self.lindisp = lindisp # False
         if lindisp:
             print("Using linear displacement rays")
         self.using_fine = n_fine > 0
         self.sched = sched
         if sched is not None and len(sched) == 0:
             self.sched = None
-        self.register_buffer(
-            "iter_idx", torch.tensor(0, dtype=torch.long), persistent=True
-        )
-        self.register_buffer(
-            "last_sched", torch.tensor(0, dtype=torch.long), persistent=True
-        )
+        self.register_buffer("iter_idx", torch.tensor(0, dtype=torch.long), persistent=True)
+        self.register_buffer("last_sched", torch.tensor(0, dtype=torch.long), persistent=True)
 
     def sample_coarse(self, rays): # 計算Coarse network的Sample points
         """
@@ -89,15 +76,16 @@ class NeRFRenderer(torch.nn.Module):
         device = rays.device
         near, far = rays[:, -2:-1], rays[:, -1:]  # (B, 1)
 
-        step = 1.0 / self.n_coarse
-        B = rays.shape[0]
-        z_steps = torch.linspace(0, 1 - step, self.n_coarse, device=device)  # (Kc)
-        z_steps = z_steps.unsqueeze(0).repeat(B, 1)  # (B, Kc) 擴展B倍
-        z_steps += torch.rand_like(z_steps) * step
-        if not self.lindisp:  # Use linear sampling in depth space
-            return near * (1 - z_steps) + far * z_steps  # (B, Kf)
+        step = 1.0 / self.n_coarse # 1/64
+        B = rays.shape[0] # ray_batch_size, 50000
+        # 1有沒有-step好像沒差 (nerfpl就沒有)
+        z_steps = torch.linspace(0, 1 - step, self.n_coarse, device=device)  # [Kc], default=64
+        z_steps = z_steps.unsqueeze(0).repeat(B, 1)  # [ray_batch_size] 擴展B倍 
+        z_steps += torch.rand_like(z_steps) * step # 添加一個隨機數增加浮動性 (optional)
+        if not self.lindisp:  # SRN default, Use linear sampling in depth space
+            return near * (1 - z_steps) + far * z_steps  # [ray_batch_size, Kc] (50000,64)
         else:  # Use linear sampling in disparity space
-            return 1 / (1 / near * (1 - z_steps) + 1 / far * z_steps)  # (B, Kf)
+            return 1 / (1 / near * (1 - z_steps) + 1 / far * z_steps)
 
         # Use linear sampling in depth space
         return near * (1 - z_steps) + far * z_steps  # (B, Kc)
@@ -146,56 +134,52 @@ class NeRFRenderer(torch.nn.Module):
         return z_samp
 
     # 計算該條rays打在pixel上的RGB 也就是作真正的Volume Rendering
-    def composite(self, model, rays, z_samp, coarse=True, sb=0):
+    def composite(self, model, rays, z_sample, coarse=True, sb=0):
+        """ Kc = coarse sample數
+        param model should return (B, (r, g, b, sigma)) when called with (B, (x, y, z))
+        param rays [ray_batch_size, 8]
+        param z_sample [ray_batch_size, Kc]
+        param coarse True
+        param sb super-batch dimension; 0 = disable
+        return weights [ray_batch_size, Kc]
+        return rgb [ray_batch_size, 3]
+        return depth [ray_batch_size]
         """
-        Render RGB and depth for each ray using NeRF alpha-compositing formula,
-        given sampled positions along each ray (see sample_*)
-        :param model should return (B, (r, g, b, sigma)) when called with (B, (x, y, z))
-        should also support 'coarse' boolean argument
-        :param rays ray [origins (3), directions (3), near (1), far (1)] (B, 8)
-        :param z_samp z positions sampled for each ray (B, K)
-        :param coarse whether to evaluate using coarse NeRF
-        :param sb super-batch dimension; 0 = disable
-        :return weights (B, K), rgb (B, 3), depth (B)
-        """ # 這邊的K是sample point數量
         with profiler.record_function("renderer_composite"):
-            B, K = z_samp.shape
+            B, K = z_sample.shape # 50000, 64
 
-            deltas = z_samp[:, 1:] - z_samp[:, :-1]  # (B, K-1)
-            #  if far:
-            #      delta_inf = 1e10 * torch.ones_like(deltas[:, :1])  # infty (B, 1)
-            delta_inf = rays[:, -1:] - z_samp[:, -1:] # delta_inf為最後一格delta, 限於far
-            deltas = torch.cat([deltas, delta_inf], -1)  # (B, K)
+            deltas = z_sample[:, 1:] - z_sample[:, :-1]  # [ray_batch_size, Kc-1]
+            delta_inf = rays[:, -1:] - z_sample[:, -1:] # delta_inf為最後一格delta, 限於far
+            deltas = torch.cat([deltas, delta_inf], -1)  # [ray_batch_size, Kc]
 
-            # (B, K, 3) 這邊是r(t) = o + t*d  B條rays, K個points
-            points = rays[:, None, :3] + z_samp.unsqueeze(2) * rays[:, None, 3:6]
-            points = points.reshape(-1, 3)  # (B*K, 3)
+            points = rays[:, None, :3] + z_sample.unsqueeze(2) * rays[:, None, 3:6] # [ray_batch_size, Kc, 3] x=o+td 
+            points = points.reshape(-1, 3)  # (ray_batch_size*Kc, 3)
+            use_viewdirs = hasattr(model, "use_viewdirs") and model.use_viewdirs # True
 
-            # True/False
-            use_viewdirs = hasattr(model, "use_viewdirs") and model.use_viewdirs
-
-            val_all = []
-            if sb > 0:
-                points = points.reshape(sb, -1, 3)  # (SB, B'*K, 3) B' is real ray batch size
-                eval_batch_size = (self.eval_batch_size - 1) // sb + 1
+            if sb > 0: # default, 但我設SB=1 所以不變
+                points = points.reshape(sb, -1, 3)  # [SB, ray_batch_size*Kc/SB, 3]
+                eval_batch_size = (self.eval_batch_size - 1) // sb + 1 # 把eval_batch_size均分給SB
                 eval_batch_dim = 1
             else:
-                eval_batch_size = self.eval_batch_size
+                eval_batch_size = self.eval_batch_size # 100000
                 eval_batch_dim = 0
-
+            
             split_points = torch.split(points, eval_batch_size, dim=eval_batch_dim)
+                # SRN(32), len(split_points) = ray_batch_size * Kc / (SB * eval_batch_size)
+            val_all = []
             if use_viewdirs:
-                dim1 = K
-                viewdirs = rays[:, None, 3:6].expand(-1, dim1, -1)  # (B, K, 3)
-                if sb > 0: # 是否為multi-object 每個物體都要有自己的rays
-                    viewdirs = viewdirs.reshape(sb, -1, 3)  # (SB, B'*K, 3)
-                else: # 反之則統一
-                    viewdirs = viewdirs.reshape(-1, 3)  # (B*K, 3)
-                split_viewdirs = torch.split( # 將viewdirs切成多個子張量
-                    viewdirs, eval_batch_size, dim=eval_batch_dim
-                )
+                dim1 = K # 64, Kc
+                viewdirs = rays[:, None, 3:6].expand(-1, dim1, -1)  # [ray_batch_size, Kc, 3]
+                if sb > 0: # SB>0, default
+                    viewdirs = viewdirs.reshape(sb, -1, 3)  # [SB, ray_batch_size*Kc/SB, 3]
+                else: 
+                    viewdirs = viewdirs.reshape(-1, 3)  # [ray_batch_size*Kc/SB, 3]
+                split_viewdirs = torch.split(viewdirs, eval_batch_size, dim=eval_batch_dim)
+                    # SRN(32), len(split_viewdirs) = ray_batch_size * Kc / (SB * eval_batch_size)
+
                 # 把pts,viewdirs丟進MLP中作預測rgb,sigma
                 for pnts, dirs in zip(split_points, split_viewdirs):
+                    print(model)
                     val_all.append(model(pnts, coarse=coarse, viewdirs=dirs))
             else:
                 for pnts in split_points:
@@ -203,8 +187,6 @@ class NeRFRenderer(torch.nn.Module):
             points = None
             viewdirs = None
             # (B*K, 4) OR (SB, B'*K, 4)->if multi-object
-            print(val_all)
-            print(eval_batch_dim)
             out = torch.cat(val_all, dim=eval_batch_dim)
             out = out.reshape(B, K, -1)  # (B, K, 4 or 5)
 
@@ -230,7 +212,7 @@ class NeRFRenderer(torch.nn.Module):
             alphas_shifted = None
 
             rgb_final = torch.sum(weights.unsqueeze(-1) * rgbs, -2)  # (B, 3)
-            depth_final = torch.sum(weights * z_samp, -1)  # (B)
+            depth_final = torch.sum(weights * z_sample, -1)  # (B)
             if self.white_bkgd:
                 # White background
                 pix_alpha = weights.sum(dim=1)  # (B), pixel alpha
@@ -241,57 +223,39 @@ class NeRFRenderer(torch.nn.Module):
                 depth_final,
             )
 
-    def forward( # 將資料整理好開始呼叫composite作render
-        self, model, rays, want_weights=False,
-    ):
+    def forward( self, model, rays, want_weights=False): # 將資料整理好開始呼叫composite作render
         """
+        param rays [SB,ray_batch_size,8] (1,50000,8)
         :model nerf model, should return (SB, B, (r, g, b, sigma))
-        when called with (SB, B, (x, y, z)), for multi-object:
-        SB = 'super-batch' = size of object batch,
-        B  = size of per-object ray batch.
-        Should also support 'coarse' boolean argument for coarse NeRF.
         :param rays ray spec [origins (3), directions (3), near (1), far (1)] (SB, B, 8)
         :param want_weights if true, returns compositing weights (SB, B, K)
         :return render dict
         """
         with profiler.record_function("renderer_forward"):
-            if self.sched is not None and self.last_sched.item() > 0:
+            if self.sched is not None and self.last_sched.item() > 0: # 預設不會跑
                 self.n_coarse = self.sched[1][self.last_sched.item() - 1] # Sample_coarse
                 self.n_fine = self.sched[2][self.last_sched.item() - 1] # Sample_fine
-
             assert len(rays.shape) == 3
-            superbatch_size = rays.shape[0]
-            rays = rays.reshape(-1, 8)  # (SB * B, 8)
+            superbatch_size = rays.shape[0] # SB(1)
+            rays = rays.reshape(-1, 8)  # [SB*B, 8] (50000,8)
 
-            z_coarse = self.sample_coarse(rays)  # (B, Kc)
-            coarse_composite = self.composite( # 計算Coarse network的Volume Rendering
-                model, rays, z_coarse, coarse=True, sb=superbatch_size,
-            )
-
-            outputs = DotMap( # 創建更具結構化的數據
-                coarse=self._format_outputs(
-                    coarse_composite, superbatch_size, want_weights=want_weights,
-                ),
-            )
+            z_coarse = self.sample_coarse(rays)  # [ray_batch_size, Kc] (50000, 64)
+            coarse_composite = self.composite(model, rays, z_coarse, coarse=True, sb=superbatch_size)
+                # 計算Coarse network的Volume Rendering
+            outputs = DotMap(coarse=self._format_outputs(coarse_composite, superbatch_size, want_weights=want_weights))
+                # 創建更具結構化的數據
 
             if self.using_fine:
                 all_samps = [z_coarse]
                 if self.n_fine - self.n_fine_depth > 0: # 不懂為何
-                    all_samps.append(
-                        self.sample_fine(rays, coarse_composite[0].detach())
-                    )  # (B, Kf - Kfd)
+                    all_samps.append(self.sample_fine(rays, coarse_composite[0].detach()))  # (B, Kf - Kfd)
                 if self.n_fine_depth > 0:
-                    all_samps.append(
-                        self.sample_fine_depth(rays, coarse_composite[2])
-                    )  # (B, Kfd)
+                    all_samps.append(self.sample_fine_depth(rays, coarse_composite[2]))  # (B, Kfd)
                 z_combine = torch.cat(all_samps, dim=-1)  # (B, Kc + Kf)
                 z_combine_sorted, argsort = torch.sort(z_combine, dim=-1) #　依照距離排序points
-                fine_composite = self.composite( # 計算Fine network的Volume Rendering
-                    model, rays, z_combine_sorted, coarse=False, sb=superbatch_size,
-                )
-                outputs.fine = self._format_outputs(
-                    fine_composite, superbatch_size, want_weights=want_weights,
-                )
+                fine_composite = self.composite( model, rays, z_combine_sorted, coarse=False, sb=superbatch_size)
+                    # 計算Fine network的Volume Rendering
+                outputs.fine = self._format_outputs(fine_composite, superbatch_size, want_weights=want_weights)
 
             return outputs
 
