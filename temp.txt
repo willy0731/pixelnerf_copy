@@ -1,0 +1,37 @@
+python train.py -F srn -D cars -B 4 --name cars_1 -r
+
+
+For NMR
+python eval/eval.py -F srn -D cars --multicat
+
+For SRN
+python eval/eval.py -D src/data/srn_cars -n srn_cars_2  -P 64 -O eval_out/srn_cars_2 -F srn 
+
+
+For SRN
+python eval/gen_video.py -F srn -D cars -P 2 --split test -n cars_1 -S 0
+
+python train/train.py -n srn_cars_2 -c conf/exp/srn.conf -D src/data/srn_cars
+python train/train.py -n srn_chair_1 -c conf/exp/srn.conf -D src/data/srn_chairs
+
+python train/train.py -n multi_obj_2 -c conf/exp/multi_obj.conf -D src/data
+
+For multi_obj
+python eval/eval.py -D src/data -n multi_obj_debug_1214 -P 8 -O eval_out/multi_obj_debug_1214 -F multi_obj --split test 
+
+For DTU
+python train/train.py -n dtu_1 -c conf/exp/dtu.conf -D src/data/rs_dtu_4 -V 3  
+
+大概在一半
+8478439998e4af846602d94d941a9c9 
+input:64
+output:130
+
+第四輪
+8242b114695b68286f522b2bb8ded829 (OK)
+input:64
+output:160
+
+
+
+
